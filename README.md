@@ -22,7 +22,7 @@ BasePaint Bundle Marketplace enables trading of complete year bundles:
 
 | Contract | Address |
 |----------|---------|
-| **Marketplace Proxy** | [`0x30c5aB523e8324F36f528742c55Ca28D78025F4E`](https://basescan.org/address/0x30c5aB523e8324F36f528742c55Ca28D78025F4E) |
+| **Marketplace Proxy** | [`0xB0897037052BB9104CcDF743358ea4f91990A362`](https://basescan.org/address/0xB0897037052BB9104CcDF743358ea4f91990A362) |
 | **BasePaint NFT** | [`0xba5e05cb26b78eda3a2f8e3b3814726305dcac83`](https://basescan.org/address/0xba5e05cb26b78eda3a2f8e3b3814726305dcac83) |
 | **WETH** | [`0x4200000000000000000000000000000000000006`](https://basescan.org/address/0x4200000000000000000000000000000000000006) |
 
