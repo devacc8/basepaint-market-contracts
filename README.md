@@ -58,14 +58,38 @@ forge test -vvv
 forge coverage
 ```
 
+## Contract Variants
+
+This repository includes two versions of the marketplace contract:
+
+| Contract | Description | Use Case |
+|----------|-------------|----------|
+| `BasePaintMarket.sol` | UUPS Upgradeable | Production deployment (proxy pattern) |
+| `BasePaintMarketFlat.sol` | Non-upgradeable | Simple deployment via Remix, immutable |
+
+### Differences
+
+**BasePaintMarket.sol (Upgradeable)**
+- Uses OpenZeppelin Upgradeable contracts
+- Deployed via UUPS proxy pattern
+- Can be upgraded by owner
+- `initialize()` function instead of constructor
+
+**BasePaintMarketFlat.sol (Non-upgradeable)**
+- Uses standard OpenZeppelin contracts
+- Direct deployment (no proxy)
+- Immutable after deployment
+- Standard `constructor()`
+
 ## Architecture
 
 ```
 src/
-├── BasePaintMarket.sol     # Main marketplace contract (UUPS upgradeable)
+├── BasePaintMarket.sol      # Main contract (UUPS upgradeable)
+├── BasePaintMarketFlat.sol  # Non-upgradeable version
 └── mocks/
-    ├── MockBasePaint.sol   # Mock ERC1155 for testing
-    └── MockWETH.sol        # Mock WETH for testing
+    ├── MockBasePaint.sol    # Mock ERC1155 for testing
+    └── MockWETH.sol         # Mock WETH for testing
 
 test/
 ├── BasePaintMarket.t.sol      # Unit tests
