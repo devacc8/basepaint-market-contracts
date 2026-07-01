@@ -7,6 +7,7 @@ import "../src/mocks/MockBasePaint.sol";
 import "../src/mocks/MockWETH.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 /**
@@ -77,11 +78,10 @@ contract BasePaintMarketFuzzTest is Test {
     // FUZZ TEST: Signature Replay Attack
     // ===========================================
 
-    function testFuzz_SignatureReplayProtection(uint256 salt1, uint256 salt2, uint256 price, uint256 expiresAt)
-        public
-    {
+    function testFuzz_SignatureReplayProtection(uint256 salt1, uint256 salt2, uint256 price, uint256 expiresAt) public {
         vm.assume(price > 0 && price < 100 ether);
-        vm.assume(expiresAt > block.timestamp);
+        // v1.13 (M-02): an acceptable offer must expire within MAX_OFFER_DURATION.
+        expiresAt = bound(expiresAt, block.timestamp + 1, block.timestamp + market.MAX_OFFER_DURATION());
         vm.assume(salt1 != salt2); // Different salts
 
         // Setup buyer with WETH
@@ -282,12 +282,15 @@ contract BasePaintMarketFuzzTest is Test {
         // Deploy new implementation
         BasePaintMarket newImplementation = new BasePaintMarket();
 
-        // Try to upgrade as non-owner - should fail
+        // OZ v5 reverts with a typed custom error (not a string), and UUPS
+        // exposes `upgradeToAndCall(address,bytes)` only — the v4-era
+        // `upgradeTo(address)` selector no longer exists. The previous version
+        // of this test combined a legacy string matcher with a non-existent
+        // selector dispatched via low-level `.call()` (which swallows
+        // reverts), so it passed vacuously on every fuzz seed.
         vm.prank(randomAttacker);
-        vm.expectRevert("Ownable: caller is not the owner");
-        (bool success,) =
-            address(market).call(abi.encodeWithSignature("upgradeTo(address)", address(newImplementation)));
-        assertFalse(success);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, randomAttacker));
+        UUPSUpgradeable(address(market)).upgradeToAndCall(address(newImplementation), "");
     }
 
     // ===========================================
@@ -295,7 +298,10 @@ contract BasePaintMarketFuzzTest is Test {
     // ===========================================
 
     function testFuzz_TimestampExploits(uint256 timestamp, uint256 warpTime) public {
-        vm.assume(timestamp > block.timestamp);
+        // v1.13 (M-02): offer expiry must be within MAX_OFFER_DURATION of now;
+        // bounding here keeps the test focused on expired-vs-not (warping forward
+        // can only make it expire, never exceed the M-02 window).
+        timestamp = bound(timestamp, block.timestamp + 1, block.timestamp + market.MAX_OFFER_DURATION());
         vm.assume(warpTime > 0 && warpTime < 365 days);
 
         // Setup buyer

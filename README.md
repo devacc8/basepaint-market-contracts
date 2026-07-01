@@ -1,18 +1,19 @@
 # BasePaint Bundle Marketplace - Smart Contracts
 
-Smart contracts for BasePaint Bundle Marketplace on Base L2. Trade complete BasePaint year collections (365 NFTs) in single transactions.
+Smart contracts for BasePaint Bundle Marketplace on Base L2. Trade complete BasePaint collections — full years (365 NFTs) and monthly sets (30 days) — in single atomic transactions.
 
 ## Overview
 
-BasePaint Bundle Marketplace enables trading of complete year bundles:
-- **Year 1**: Days 1-365 (365 NFTs)
-- **Year 2**: Days 366-730 (365 NFTs)
+BasePaint Bundle Marketplace enables trading of complete BasePaint sets in one transaction. **26 bundle types (v1.13):**
+- **Year 1** / **Year 2** — full-year sets: days 1–365 / 366–730 (365 NFTs each)
+- **24 monthly (mini) sets** (`mini-1` … `mini-24`) — 30-day slices of each year, except each year's closing month (`mini-12`, `mini-24`) which runs 35 days. Ranges are derived on-chain by `_rangeForBundle`; the enum is fixed and append-only.
 
 ## Features
 
 - **Approval-Based Listings**: NFTs remain with seller until purchase (OpenSea pattern)
+- **Year & Monthly Sets**: 26 bundle types — full years (365 NFTs) or 30-day monthly slices — with on-chain range validation
 - **WETH Offers**: Off-chain EIP-712 signatures, zero gas for offer creation
-- **Bundle Validation**: Atomic validation of all 365 NFTs at purchase time
+- **Bundle Validation**: Atomic validation of every NFT in the set (365 for a year, 30/35 for a month) at purchase time
 - **Security First**: ReentrancyGuard, Pausable, comprehensive access control
 - **UUPS Upgradeable**: Proxy pattern for future improvements
 
@@ -22,9 +23,12 @@ BasePaint Bundle Marketplace enables trading of complete year bundles:
 
 | Contract | Address |
 |----------|---------|
-| **Marketplace Proxy** | [`0xB0897037052BB9104CcDF743358ea4f91990A362`](https://basescan.org/address/0xB0897037052BB9104CcDF743358ea4f91990A362) |
+| **Marketplace Proxy** (UUPS) | [`0xB0897037052BB9104CcDF743358ea4f91990A362`](https://basescan.org/address/0xB0897037052BB9104CcDF743358ea4f91990A362) |
+| **Implementation** (v1.13) | [`0x8c4f391e8b2c6351d57cf004bb986ca116f669f2`](https://basescan.org/address/0x8c4f391e8b2c6351d57cf004bb986ca116f669f2#code) |
 | **BasePaint NFT** | [`0xba5e05cb26b78eda3a2f8e3b3814726305dcac83`](https://basescan.org/address/0xba5e05cb26b78eda3a2f8e3b3814726305dcac83) |
 | **WETH** | [`0x4200000000000000000000000000000000000006`](https://basescan.org/address/0x4200000000000000000000000000000000000006) |
+
+> `src/BasePaintMarket.sol` in this repo is the **v1.13 production source** — it matches the deployed implementation above.
 
 ## Development
 
@@ -64,8 +68,8 @@ This repository includes two versions of the marketplace contract:
 
 | Contract | Description | Use Case |
 |----------|-------------|----------|
-| `BasePaintMarket.sol` | UUPS Upgradeable | Production deployment (proxy pattern) |
-| `BasePaintMarketFlat.sol` | Non-upgradeable | Simple deployment via Remix, immutable |
+| `BasePaintMarket.sol` | UUPS Upgradeable | **Production** (v1.13) — the deployed & audited contract |
+| `BasePaintMarketFlat.sol` | Non-upgradeable | Legacy Remix/immutable reference — **may lag production** (does not include the v1.13 mini-sets) |
 
 ### Differences
 
@@ -98,7 +102,7 @@ test/
 
 ## Security
 
-- **Audit Status**: Internal audit completed (v1.11, score 9.0/10)
+- **Audit Status**: v1.11 audited (9.0/10); v1.13 mini-set upgrade re-audited 2026-06 (0 critical/high)
 - **Bug Bounty**: Contact via GitHub issues
 
 ### Security Features
@@ -107,7 +111,8 @@ test/
 - Pausable for emergency stops
 - Ownable2Step for secure ownership transfer
 - Buyer blacklist for compliance
-- Minimum price requirements
+- Minimum price requirements (separate floors for year vs mini sets)
+- Fixed, append-only bundle enum — no arbitrary ranges
 
 ## License
 

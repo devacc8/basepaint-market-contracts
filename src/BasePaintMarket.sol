@@ -24,6 +24,14 @@ import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet
  * @dev v1.9: Batch limit for cleanupExpiredListings
  * @dev v1.10: Seller blacklist check in buyListing
  * @dev v1.11: SafeERC20 for WETH, Ownable2Step, filter expired in getActiveListings
+ * @dev v1.12: Audit 2026-05-18 SC H-01 — clear activeListingByUser in createListing auto-cleanup branch (was already cleared in cancelListing / acceptCollectionOffer / cleanupExpiredListings, missing only here)
+ * @dev v1.13: Mini-set bundles (24 × 30/35-day sets via appended enum + pure
+ *      range formula) + per-category min price. Ships the deferred 2026-05-18
+ *      SC audit batch: M-01 (CEI: WETH payout before the NFT transfer in
+ *      acceptCollectionOffer; buyListing keeps ETH-after-NFT by design — see
+ *      its note), M-02 (MAX_OFFER_DURATION), L-01 (min-price bounds),
+ *      L-03 (cleanup while paused), L-04 (_clearListing helper — makes H-01
+ *      structural). L-02 (indefinite pause) accepted as-design (see pause()).
  * @custom:security-contact security@basepaintmarket.xyz
  */
 contract BasePaintMarket is
@@ -59,6 +67,15 @@ contract BasePaintMarket is
     /// @notice Maximum listing duration (180 days)
     uint256 public constant MAX_LISTING_DURATION = 180 days;
 
+    /// @notice Max future window an acceptable offer may expire within (v1.13, audit M-02).
+    /// @dev A stale offer signed with expiresAt far in the future can never be
+    ///      accepted — protects forgotten / stolen-key offers.
+    uint256 public constant MAX_OFFER_DURATION = 90 days;
+
+    /// @notice Sanity bounds for owner-set minimum listing prices (v1.13, audit L-01).
+    uint256 public constant MIN_FLOOR_BOUND = 0.001 ether;
+    uint256 public constant MAX_FLOOR_BOUND = 1000 ether;
+
     /// @notice Accumulated platform fees in ETH (from buyListing)
     uint256 public platformFeesAccumulated;
 
@@ -74,11 +91,40 @@ contract BasePaintMarket is
     /// @notice Emergency message displayed on frontend
     string public emergencyMessage;
 
-    /// @notice Bundle types available for trading
+    /// @notice Bundle types available for trading.
+    /// @dev APPEND-ONLY INVARIANT: these are uint8 indices persisted on-chain
+    ///      (listings, offers, events). Existing values are FROZEN — never
+    ///      reorder or insert; new types (e.g. a future Year 3) ALWAYS append
+    ///      at the end. Day ranges are derived by `_rangeForBundle` (v1.13).
+    ///      Year sets cover 365 days; mini-sets cover 30 days, except the
+    ///      closing mini of each year (MINI_12, MINI_24) which covers 35.
     enum BundleType {
-        YEAR_1, // Days 1-365 (365 NFTs)
-        YEAR_2 // Days 366-730 (365 NFTs)
-
+        YEAR_1, // 0  days   1-365  (365 NFTs)
+        YEAR_2, // 1  days 366-730  (365 NFTs)
+        MINI_1, // 2  days   1-30
+        MINI_2, // 3  days  31-60
+        MINI_3, // 4  days  61-90
+        MINI_4, // 5  days  91-120
+        MINI_5, // 6  days 121-150
+        MINI_6, // 7  days 151-180
+        MINI_7, // 8  days 181-210
+        MINI_8, // 9  days 211-240
+        MINI_9, // 10 days 241-270
+        MINI_10, // 11 days 271-300
+        MINI_11, // 12 days 301-330
+        MINI_12, // 13 days 331-365 (35d, closing)
+        MINI_13, // 14 days 366-395
+        MINI_14, // 15 days 396-425
+        MINI_15, // 16 days 426-455
+        MINI_16, // 17 days 456-485
+        MINI_17, // 18 days 486-515
+        MINI_18, // 19 days 516-545
+        MINI_19, // 20 days 546-575
+        MINI_20, // 21 days 576-605
+        MINI_21, // 22 days 606-635
+        MINI_22, // 23 days 636-665
+        MINI_23, // 24 days 666-695
+        MINI_24 // 25 days 696-730 (35d, closing)
     }
 
     /// @notice Listing structure
@@ -126,21 +172,32 @@ contract BasePaintMarket is
     /// @notice Maximum length for emergency message (v1.7)
     uint256 public constant MAX_EMERGENCY_MESSAGE_LENGTH = 500;
 
+    /// @notice Minimum listing price for mini-set bundles (v1.13).
+    /// @dev Years use `minListingPrice` (1 ETH); minis use this lower floor.
+    ///      Added in the first free `__gap` slot — see the reduced gap below.
+    uint256 public minMiniListingPrice;
+
     /// @notice Storage gap for future upgrades (v1.4)
-    /// @dev Reserve 49 slots (reduced from 50 due to offerNonces mapping)
-    uint256[49] private __gap;
+    /// @dev Reserve 48 slots (v1.13: reduced 49→48 for minMiniListingPrice)
+    uint256[48] private __gap;
 
     // EIP-712 typehash for collection offers
     // v1.7: Added nonce field for on-chain cancellation support
-    bytes32 public constant COLLECTION_OFFER_TYPEHASH =
-        keccak256("CollectionOffer(address buyer,uint8 bundleType,uint256 price,uint256 expiresAt,uint256 salt,uint256 nonce)");
+    bytes32 public constant COLLECTION_OFFER_TYPEHASH = keccak256(
+        "CollectionOffer(address buyer,uint8 bundleType,uint256 price,uint256 expiresAt,uint256 salt,uint256 nonce)"
+    );
 
     // ============================================
     // EVENTS
     // ============================================
 
     event ListingCreated(
-        uint256 indexed listingId, address indexed seller, BundleType bundleType, uint256 price, uint256 expiresAt, uint256 timestamp
+        uint256 indexed listingId,
+        address indexed seller,
+        BundleType bundleType,
+        uint256 price,
+        uint256 expiresAt,
+        uint256 timestamp
     );
 
     event ListingCancelled(uint256 indexed listingId, BundleType bundleType, uint256 timestamp);
@@ -169,6 +226,7 @@ contract BasePaintMarket is
 
     event PlatformFeeUpdated(uint256 oldFee, uint256 newFee);
     event MinListingPriceUpdated(uint256 oldPrice, uint256 newPrice);
+    event MinMiniListingPriceUpdated(uint256 oldPrice, uint256 newPrice); // v1.13
     event PlatformFeesWithdrawn(address indexed recipient, uint256 amount);
     event PlatformFeesWithdrawnWETH(address indexed recipient, uint256 amount);
     event BlacklistUpdated(address indexed user, bool blacklisted);
@@ -205,6 +263,8 @@ contract BasePaintMarket is
     error InvalidAmount();
     error OfferNonceMismatch();
     error EmergencyMessageTooLong();
+    error OfferTooLong(); // v1.13 (M-02): offer expiry too far in the future
+    error InvalidMinPrice(); // v1.13 (L-01): min-price setter out of sane bounds
 
     // ============================================
     // MODIFIERS
@@ -248,6 +308,19 @@ contract BasePaintMarket is
         nextListingId = 1;
     }
 
+    /**
+     * @notice v1.13 upgrade initializer — sets the mini-set minimum price.
+     * @param _minMiniListingPrice Initial mini-set floor (0.1 ether)
+     * @dev reinitializer(2): the proxy used only the original `initialize`
+     *      (version 1) across v1.4–v1.12; this is the first reinitializer.
+     *      Bounds-checked like the runtime setter (L-01).
+     */
+    function initializeV13(uint256 _minMiniListingPrice) external reinitializer(2) {
+        _requireSaneFloor(_minMiniListingPrice);
+        minMiniListingPrice = _minMiniListingPrice;
+        emit MinMiniListingPriceUpdated(0, _minMiniListingPrice);
+    }
+
     // ============================================
     // LISTING FUNCTIONS
     // ============================================
@@ -258,8 +331,14 @@ contract BasePaintMarket is
      * @param price Asking price in ETH (must be >= minListingPrice)
      * @param duration Listing duration in seconds (min 1 day, max 180 days)
      */
-    function createListing(BundleType bundleType, uint256 price, uint256 duration) external whenNotPaused notBlacklisted {
-        if (price < minListingPrice) revert PriceTooLow();
+    function createListing(BundleType bundleType, uint256 price, uint256 duration)
+        external
+        whenNotPaused
+        notBlacklisted
+    {
+        // v1.13: per-category floor — years use minListingPrice, minis use the
+        // lower minMiniListingPrice.
+        if (price < (_isYear(bundleType) ? minListingPrice : minMiniListingPrice)) revert PriceTooLow();
         if (duration < MIN_LISTING_DURATION || duration > MAX_LISTING_DURATION) revert InvalidDuration();
 
         // Check for existing listing and auto-cleanup if expired (v1.6)
@@ -269,8 +348,9 @@ contract BasePaintMarket is
             if (existing.active) {
                 // If expired - auto cleanup
                 if (block.timestamp > existing.expiresAt) {
-                    existing.active = false;
-                    activeListingIds.remove(existingListingId);
+                    // v1.13 (L-04): single helper clears all three pieces —
+                    // makes the H-01 invariant structural, not per-call-site.
+                    _clearListing(existingListingId, existing);
                     emit ListingExpiredAndCleaned(existingListingId, bundleType, block.timestamp);
                 } else {
                     // Not expired - truly active listing exists
@@ -318,13 +398,7 @@ contract BasePaintMarket is
         if (listing.seller != msg.sender) revert NotSeller();
         if (!listing.active) revert ListingNotActive();
 
-        listing.active = false;
-
-        // Clear active listing mapping
-        delete activeListingByUser[msg.sender][listing.bundleType];
-
-        // Remove from active listings set (v1.3)
-        activeListingIds.remove(listingId);
+        _clearListing(listingId, listing); // v1.13 (L-04)
 
         emit ListingCancelled(listingId, listing.bundleType, block.timestamp);
     }
@@ -351,24 +425,31 @@ contract BasePaintMarket is
         // Validate bundle ownership (v1.5: fail fast with MissingToken error before state changes)
         _validateBundleOwnership(listing.seller, listing.bundleType);
 
-        // Deactivate listing
-        listing.active = false;
-
-        // Clear active listing mapping
-        delete activeListingByUser[listing.seller][listing.bundleType];
-
-        // Remove from active listings set (v1.3)
-        activeListingIds.remove(listingId);
+        // v1.13 (L-04): single helper clears all three listing-state pieces.
+        _clearListing(listingId, listing);
 
         // CRITICAL: Validate bundle integrity AND transfer in single call
-        // Gas optimization: generates tokenIds array only ONCE
+        // Gas optimization: generates tokenIds array only ONCE.
+        //
+        // NOTE (v1.13): unlike acceptCollectionOffer (M-01 reorder), buyListing
+        // INTENTIONALLY pays the seller AFTER the NFT transfer. Payment here is
+        // native ETH via `seller.call` (a seller callback); doing it before the
+        // transfer would let a contract-seller's receive() move a bundle NFT and
+        // self-DoS the sale. ETH-after-NFT is the audit-correct order — the
+        // asymmetry with the WETH path is deliberate. nonReentrant guards both.
         _validateAndTransferBundle(listing.seller, msg.sender, listing.bundleType);
 
-        // Distribute payment
+        // Distribute payment (ETH → seller). Must stay AFTER the NFT transfer.
         _distributeFunds(listing.seller, listing.price);
 
         emit ListingSold(
-            listingId, msg.sender, listing.seller, listing.bundleType, listing.price, (listing.price * platformFee) / 10000, block.timestamp
+            listingId,
+            msg.sender,
+            listing.seller,
+            listing.bundleType,
+            listing.price,
+            (listing.price * platformFee) / 10000,
+            block.timestamp
         );
 
         // Refund excess payment if any
@@ -403,6 +484,11 @@ contract BasePaintMarket is
         // Validate expiration
         if (block.timestamp > offer.expiresAt) revert OfferExpired();
 
+        // v1.13 (M-02): reject offers expiring too far in the future. A stale /
+        // forgotten / stolen-key offer signed with a huge expiresAt can never be
+        // accepted; legit offers (expiry within MAX_OFFER_DURATION) are fine.
+        if (offer.expiresAt > block.timestamp + MAX_OFFER_DURATION) revert OfferTooLong();
+
         // v1.7: Validate offer nonce matches current user nonce
         if (offer.nonce != offerNonces[offer.buyer]) revert OfferNonceMismatch();
 
@@ -411,7 +497,13 @@ contract BasePaintMarket is
         // Verify EIP-712 signature (v1.7: includes nonce)
         bytes32 structHash = keccak256(
             abi.encode(
-                COLLECTION_OFFER_TYPEHASH, offer.buyer, offer.bundleType, offer.price, offer.expiresAt, offer.salt, offer.nonce
+                COLLECTION_OFFER_TYPEHASH,
+                offer.buyer,
+                offer.bundleType,
+                offer.price,
+                offer.expiresAt,
+                offer.salt,
+                offer.nonce
             )
         );
 
@@ -441,12 +533,10 @@ contract BasePaintMarket is
         // Validate bundle ownership (v1.5: fail fast with MissingToken error before state changes)
         _validateBundleOwnership(msg.sender, offer.bundleType);
 
-        // Cancel any active listing from seller for this bundle type
+        // Cancel any active listing from seller for this bundle type (L-04 helper)
         uint256 existingListingId = activeListingByUser[msg.sender][offer.bundleType];
         if (existingListingId != 0 && listings[existingListingId].active) {
-            listings[existingListingId].active = false;
-            delete activeListingByUser[msg.sender][offer.bundleType];
-            activeListingIds.remove(existingListingId);
+            _clearListing(existingListingId, listings[existingListingId]);
             emit ListingCancelled(existingListingId, offer.bundleType, block.timestamp);
         }
 
@@ -454,18 +544,18 @@ contract BasePaintMarket is
         uint256 fee = (offer.price * platformFee) / 10000;
         uint256 sellerAmount = offer.price - fee;
 
-        // Transfer WETH first (fail-fast: prevents wasted gas on 365 NFT transfers)
-        weth.safeTransferFrom(offer.buyer, address(this), offer.price);
+        // v1.13 (M-01): perform ALL WETH movements + fee accounting BEFORE the
+        // NFT transfer, so the buyer's onERC1155BatchReceived callback observes a
+        // fully-settled state (seller paid, fees booked). WETH transfers have no
+        // seller callback, so paying first is safe here (unlike buyListing's ETH).
+        weth.safeTransferFrom(offer.buyer, address(this), offer.price); // WETH in (fail-fast)
+        platformFeesAccumulatedWETH += fee; // book platform fee
+        weth.safeTransfer(msg.sender, sellerAmount); // pay seller
 
-        // CRITICAL: Validate bundle integrity AND transfer in single call
-        // Gas optimization: generates tokenIds array only ONCE
+        // NFT transfer LAST — the only remaining external interaction. Reverts
+        // (ERC1155InsufficientBalance) if the seller no longer holds a token,
+        // unwinding the WETH moves atomically.
         _validateAndTransferBundle(msg.sender, offer.buyer, offer.bundleType);
-
-        // Accumulate WETH fees
-        platformFeesAccumulatedWETH += fee;
-
-        // Transfer seller amount from contract to seller
-        weth.safeTransfer(msg.sender, sellerAmount);
 
         emit CollectionOfferAccepted(
             offer.buyer, msg.sender, offer.bundleType, offer.price, fee, block.timestamp, offer.salt
@@ -496,15 +586,15 @@ contract BasePaintMarket is
      * @param listingId ID of the expired listing to clean up
      * @dev Anyone can call this - helps keep EnumerableSet clean
      * @dev Intentionally permissionless - ecosystem cleanup benefits all participants
+     * @dev v1.13 (L-03): no `whenNotPaused` — cleanup must work during a pause
+     *      so the active-set doesn't bloat with expired listings while paused.
      */
-    function cleanupExpiredListing(uint256 listingId) external whenNotPaused {
+    function cleanupExpiredListing(uint256 listingId) external {
         Listing storage listing = listings[listingId];
         if (!listing.active) revert ListingNotActive();
         if (block.timestamp <= listing.expiresAt) revert ListingNotExpired();
 
-        listing.active = false;
-        delete activeListingByUser[listing.seller][listing.bundleType];
-        activeListingIds.remove(listingId);
+        _clearListing(listingId, listing); // v1.13 (L-04)
 
         emit ListingExpiredAndCleaned(listingId, listing.bundleType, block.timestamp);
     }
@@ -517,15 +607,14 @@ contract BasePaintMarket is
      * @param listingIds Array of listing IDs to clean up (max 100)
      * @dev Silently skips invalid/non-expired listings for gas efficiency
      * @dev Intentionally permissionless - ecosystem cleanup benefits all participants
+     * @dev v1.13 (L-03): no `whenNotPaused` — cleanup must work during a pause.
      */
-    function cleanupExpiredListings(uint256[] calldata listingIds) external whenNotPaused {
+    function cleanupExpiredListings(uint256[] calldata listingIds) external {
         require(listingIds.length <= MAX_CLEANUP_BATCH, "Batch too large");
         for (uint256 i = 0; i < listingIds.length; i++) {
             Listing storage listing = listings[listingIds[i]];
             if (listing.active && block.timestamp > listing.expiresAt) {
-                listing.active = false;
-                delete activeListingByUser[listing.seller][listing.bundleType];
-                activeListingIds.remove(listingIds[i]);
+                _clearListing(listingIds[i], listing); // v1.13 (L-04)
                 emit ListingExpiredAndCleaned(listingIds[i], listing.bundleType, block.timestamp);
             }
         }
@@ -549,14 +638,27 @@ contract BasePaintMarket is
     }
 
     /**
-     * @notice Set minimum listing price
-     * @param newPrice New minimum price in wei
+     * @notice Set minimum listing price for YEAR bundles
+     * @param newPrice New minimum price in wei (within sane bounds, L-01)
      */
     function setMinListingPrice(uint256 newPrice) external onlyOwner {
+        _requireSaneFloor(newPrice); // v1.13 (L-01)
         uint256 oldPrice = minListingPrice;
         minListingPrice = newPrice;
 
         emit MinListingPriceUpdated(oldPrice, newPrice);
+    }
+
+    /**
+     * @notice Set minimum listing price for MINI-SET bundles (v1.13)
+     * @param newPrice New minimum price in wei (within sane bounds, L-01)
+     */
+    function setMinMiniListingPrice(uint256 newPrice) external onlyOwner {
+        _requireSaneFloor(newPrice); // v1.13 (L-01)
+        uint256 oldPrice = minMiniListingPrice;
+        minMiniListingPrice = newPrice;
+
+        emit MinMiniListingPriceUpdated(oldPrice, newPrice);
     }
 
     /**
@@ -631,6 +733,14 @@ contract BasePaintMarket is
     /**
      * @notice Pause the contract
      * @param reason Reason for pausing
+     * @dev v1.13 (audit L-02, accepted as-design): pause has NO maximum duration
+     *      by design. It is an emergency lever; an auto-unpause after a fixed
+     *      window could re-expose users mid-incident (worse than the problem).
+     *      The owner is the project team (Ownable2Step) and the effect is
+     *      reversible. Users can always revoke their WETH allowance and BasePaint
+     *      approval directly at the token contracts while paused, so funds are
+     *      never custodially trapped. cleanupExpired* remain callable while paused
+     *      (L-03) and cancelListing / cancelAllOffers omit `whenNotPaused`.
      */
     function pause(string calldata reason) external onlyOwner {
         _pause();
@@ -648,6 +758,32 @@ contract BasePaintMarket is
     // ============================================
     // INTERNAL FUNCTIONS
     // ============================================
+
+    /**
+     * @notice Clear all listing state in one place (v1.13, audit L-04).
+     * @dev Single source of truth for retiring a listing: flip `active`, drop
+     *      the per-user/per-type pointer, and remove from the active set. Used by
+     *      every clear path (cancel, auto-cleanup, offer-accept cancel, cleanup
+     *      fns). Making it one helper turns the H-01 invariant (all three must be
+     *      cleared together) from a per-call-site convention into structure.
+     * @param listingId The listing id (for the set removal).
+     * @param listing Storage ref to listings[listingId] (caller already loaded it).
+     */
+    function _clearListing(uint256 listingId, Listing storage listing) internal {
+        listing.active = false;
+        delete activeListingByUser[listing.seller][listing.bundleType];
+        activeListingIds.remove(listingId);
+    }
+
+    /// @notice Revert if a min-price is outside the sane bounds (v1.13, L-01).
+    function _requireSaneFloor(uint256 price) internal pure {
+        if (price < MIN_FLOOR_BOUND || price > MAX_FLOOR_BOUND) revert InvalidMinPrice();
+    }
+
+    /// @notice True for the two full-year bundle types (v1.13).
+    function _isYear(BundleType bundleType) internal pure returns (bool) {
+        return bundleType == BundleType.YEAR_1 || bundleType == BundleType.YEAR_2;
+    }
 
     /**
      * @notice Validate that address owns complete bundle
@@ -677,23 +813,37 @@ contract BasePaintMarket is
     }
 
     /**
+     * @notice Day range [start, end] (inclusive) for a bundle type (v1.13).
+     * @param bundleType The bundle type (enum-gated → always a known value)
+     * @return start First day token id in the bundle
+     * @return end Last day token id in the bundle
+     * @dev Pure + enum-gated, so the input domain is the 26 known values and the
+     *      formula is exhaustively testable. Year sets span 365 days; mini-sets
+     *      span 30 days except the 12th mini of each year (MINI_12 / MINI_24),
+     *      the 35-day closing set — so 11×30 + 35 = 365 tiles each year exactly.
+     */
+    function _rangeForBundle(BundleType bundleType) internal pure returns (uint256 start, uint256 end) {
+        uint256 idx = uint256(bundleType);
+        if (idx == 0) return (1, 365); // YEAR_1
+        if (idx == 1) return (366, 730); // YEAR_2
+        uint256 n = idx - 1; // mini number 1..24 (MINI_1 == enum index 2)
+        uint256 base = n <= 12 ? 0 : 365; // year offset
+        uint256 k = (n - 1) % 12; // in-year index 0..11
+        start = base + k * 30 + 1;
+        end = (k == 11) ? base + 365 : base + (k + 1) * 30;
+    }
+
+    /**
      * @notice Get token IDs for bundle type
      * @param bundleType Type of bundle
      * @return tokenIds Array of token IDs in the bundle
      */
     function _getBundleTokenIds(BundleType bundleType) internal pure returns (uint256[] memory tokenIds) {
-        if (bundleType == BundleType.YEAR_1) {
-            tokenIds = new uint256[](365);
-            for (uint256 i = 0; i < 365; i++) {
-                tokenIds[i] = i + 1;
-            }
-        } else if (bundleType == BundleType.YEAR_2) {
-            tokenIds = new uint256[](365);
-            for (uint256 i = 0; i < 365; i++) {
-                tokenIds[i] = i + 366; // Days 366-730
-            }
-        } else {
-            revert InvalidBundleType();
+        (uint256 start, uint256 end) = _rangeForBundle(bundleType);
+        uint256 count = end - start + 1;
+        tokenIds = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            tokenIds[i] = start + i;
         }
     }
 
@@ -773,6 +923,19 @@ contract BasePaintMarket is
      */
     function getBundleTokenIds(BundleType bundleType) external pure returns (uint256[] memory tokenIds) {
         return _getBundleTokenIds(bundleType);
+    }
+
+    /**
+     * @notice Get the inclusive day range [start, end] for a bundle type (v1.13).
+     * @param bundleType Type of bundle
+     * @return start First day token id
+     * @return end Last day token id
+     * @dev Public so off-chain consumers (indexer / frontend) can mirror the
+     *      canonical ranges directly from the contract instead of duplicating
+     *      the formula.
+     */
+    function getBundleDayRange(BundleType bundleType) external pure returns (uint256 start, uint256 end) {
+        return _rangeForBundle(bundleType);
     }
 
     /**
