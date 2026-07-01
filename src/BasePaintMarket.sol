@@ -257,6 +257,7 @@ contract BasePaintMarket is
     error Blacklisted();
     error InvalidDuration();
     error DuplicateListing();
+    error SelfTrade(); // v1.14 (audit LOW#1): buyer and seller must differ (no wash-trade)
     error ListingExpired();
     error ListingNotExpired();
     error NothingToWithdraw();
@@ -411,6 +412,9 @@ contract BasePaintMarket is
         Listing storage listing = listings[listingId];
 
         if (!listing.active) revert ListingNotActive();
+        // v1.14 (LOW#1): a seller buying their own listing is a pure wash-trade
+        // (pays themselves minus fee, inflates volume/last-price stats). Block it.
+        if (msg.sender == listing.seller) revert SelfTrade();
         if (block.timestamp > listing.expiresAt) revert ListingExpired();
         if (msg.value < listing.price) revert InsufficientPayment();
 
@@ -477,6 +481,10 @@ contract BasePaintMarket is
     {
         // Validate buyer address is not zero
         if (offer.buyer == address(0)) revert InvalidSignature();
+
+        // v1.14 (LOW#1): the accepting seller cannot also be the offer's buyer —
+        // that would be a self-trade (own bundle to self, pays self minus fee).
+        if (msg.sender == offer.buyer) revert SelfTrade();
 
         // Prevent trading with blacklisted buyers
         if (blacklist[offer.buyer]) revert Blacklisted();
@@ -958,11 +966,14 @@ contract BasePaintMarket is
 
         uint256 totalInSet = activeListingIds.length();
 
-        // First pass: count non-expired listings
+        // First pass: count non-expired listings.
+        // >= matches buyability: buyListing reverts only when block.timestamp >
+        // expiresAt, so a listing is still buyable at its exact expiry second and
+        // must stay visible here (audit MEDIUM-01: visible <=> buyable).
         uint256 nonExpiredCount = 0;
         for (uint256 i = 0; i < totalInSet; i++) {
             uint256 listingId = activeListingIds.at(i);
-            if (listings[listingId].expiresAt > block.timestamp) {
+            if (listings[listingId].expiresAt >= block.timestamp) {
                 nonExpiredCount++;
             }
         }
@@ -985,11 +996,12 @@ contract BasePaintMarket is
         listingData = new Listing[](returnSize);
 
         // Second pass: collect non-expired listings with offset/limit
+        // (same >= boundary as the first pass — see note above).
         uint256 collected = 0;
         uint256 skipped = 0;
         for (uint256 i = 0; i < totalInSet && collected < returnSize; i++) {
             uint256 listingId = activeListingIds.at(i);
-            if (listings[listingId].expiresAt > block.timestamp) {
+            if (listings[listingId].expiresAt >= block.timestamp) {
                 if (skipped < offset) {
                     skipped++;
                 } else {

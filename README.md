@@ -8,6 +8,11 @@ BasePaint Bundle Marketplace enables trading of complete BasePaint sets in one t
 - **Year 1** / **Year 2** — full-year sets: days 1–365 / 366–730 (365 NFTs each)
 - **24 monthly (mini) sets** (`mini-1` … `mini-24`) — 30-day slices of each year, except each year's closing month (`mini-12`, `mini-24`) which runs 35 days. Ranges are derived on-chain by `_rangeForBundle`; the enum is fixed and append-only.
 
+**v1.14 (source here, upgrade pending):** two logic-only hardening changes, no
+storage change — a `SelfTrade` guard on `buyListing` / `acceptCollectionOffer`
+(a party can no longer wash-trade with itself) and a `getActiveListings` expiry
+boundary fix (`>=` so a listing stays visible through its exact expiry second, matching buyability).
+
 ## Features
 
 - **Approval-Based Listings**: NFTs remain with seller until purchase (OpenSea pattern)
@@ -24,11 +29,15 @@ BasePaint Bundle Marketplace enables trading of complete BasePaint sets in one t
 | Contract | Address |
 |----------|---------|
 | **Marketplace Proxy** (UUPS) | [`0xB0897037052BB9104CcDF743358ea4f91990A362`](https://basescan.org/address/0xB0897037052BB9104CcDF743358ea4f91990A362) |
-| **Implementation** (v1.13) | [`0x8c4f391e8b2c6351d57cf004bb986ca116f669f2`](https://basescan.org/address/0x8c4f391e8b2c6351d57cf004bb986ca116f669f2#code) |
+| **Implementation** (deployed: v1.13) | [`0x8c4f391e8b2c6351d57cf004bb986ca116f669f2`](https://basescan.org/address/0x8c4f391e8b2c6351d57cf004bb986ca116f669f2#code) |
 | **BasePaint NFT** | [`0xba5e05cb26b78eda3a2f8e3b3814726305dcac83`](https://basescan.org/address/0xba5e05cb26b78eda3a2f8e3b3814726305dcac83) |
 | **WETH** | [`0x4200000000000000000000000000000000000006`](https://basescan.org/address/0x4200000000000000000000000000000000000006) |
 
-> `src/BasePaintMarket.sol` in this repo is the **v1.13 production source** — it matches the deployed implementation above.
+> `src/BasePaintMarket.sol` in this repo is the **v1.14 source** (self-trade guard
+> + `getActiveListings` expiry-boundary fix — see below). The **deployed** proxy
+> implementation above is still **v1.13**; the v1.14 upgrade is pending. v1.14
+> changes no storage and needs no reinitializer, so the upgrade is a plain
+> implementation swap.
 
 ## Development
 
@@ -102,7 +111,7 @@ test/
 
 ## Security
 
-- **Audit Status**: v1.11 audited (9.0/10); v1.13 mini-set upgrade re-audited 2026-06 (0 critical/high)
+- **Audit Status**: v1.11 audited (9.0/10); v1.13 mini-set upgrade re-audited 2026-06 (0 critical/high); v1.14 (self-trade guard + expiry-boundary fix) source published, re-audit pending before the on-chain upgrade
 - **Bug Bounty**: Contact via GitHub issues
 
 ### Security Features

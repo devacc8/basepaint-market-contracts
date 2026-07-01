@@ -618,6 +618,16 @@ contract BasePaintMarketTest is Test {
         market.buyListing{value: LISTING_PRICE}(listingId);
     }
 
+    /// @dev v1.14 LOW#1: a seller buying their own listing is a wash-trade — reject it.
+    function test_BuyListing_RevertIf_SelfTrade() public {
+        uint256 listingId = _createListing(seller, BasePaintMarket.BundleType.YEAR_1, LISTING_PRICE);
+
+        vm.deal(seller, LISTING_PRICE);
+        vm.prank(seller);
+        vm.expectRevert(BasePaintMarket.SelfTrade.selector);
+        market.buyListing{value: LISTING_PRICE}(listingId);
+    }
+
     // ============================================
     // TESTS: ADMIN FUNCTIONS
     // ============================================
@@ -939,6 +949,39 @@ contract BasePaintMarketTest is Test {
     function test_GetActiveListings_RevertIf_LimitTooHigh() public {
         vm.expectRevert("Invalid limit");
         market.getActiveListings(0, 101);
+    }
+
+    /// @dev Audit MEDIUM-01 regression: at the exact expiry second a listing is
+    ///      still buyable (buyListing reverts only when now > expiresAt), so it
+    ///      must remain visible in getActiveListings — visible <=> buyable.
+    function test_GetActiveListings_VisibleWhileStillBuyable() public {
+        uint256 listingId = _createListing(seller, BasePaintMarket.BundleType.YEAR_1, LISTING_PRICE);
+        uint256 expiresAt = market.getListing(listingId).expiresAt;
+
+        // Exact expiry second: still listed.
+        vm.warp(expiresAt);
+        (uint256[] memory ids,, uint256 total) = market.getActiveListings(0, 10);
+        assertEq(total, 1, "listing must be visible at its exact expiry second");
+        assertEq(ids[0], listingId);
+
+        // ...and still buyable in that same second (no ListingExpired revert).
+        vm.prank(buyer);
+        market.buyListing{value: LISTING_PRICE}(listingId);
+        assertEq(basePaint.balanceOf(buyer, 1), 1, "purchase at the expiry second must succeed");
+    }
+
+    /// @dev Once genuinely expired (now > expiresAt) the listing drops out of the
+    ///      view and becomes cleanup-eligible — the other side of the boundary.
+    function test_GetActiveListings_HiddenOnceExpired() public {
+        uint256 listingId = _createListing(seller, BasePaintMarket.BundleType.YEAR_1, LISTING_PRICE);
+        uint256 expiresAt = market.getListing(listingId).expiresAt;
+
+        vm.warp(expiresAt + 1);
+        (,, uint256 total) = market.getActiveListings(0, 10);
+        assertEq(total, 0, "expired listing must be hidden from the view");
+
+        // Consistent with cleanup semantics: it is now cleanup-eligible (no revert).
+        market.cleanupExpiredListing(listingId);
     }
 
     // Helper function to build token ID array
@@ -1812,6 +1855,31 @@ contract BasePaintMarketTest is Test {
         // Seller tries to accept blacklisted buyer's offer - should fail
         vm.prank(seller);
         vm.expectRevert(BasePaintMarket.Blacklisted.selector);
+        market.acceptCollectionOffer(offer, signature);
+    }
+
+    /// @dev v1.14 LOW#1: the accepting seller cannot also be the offer's buyer
+    ///      (self-trade). Guard fires before signature/WETH/ownership checks.
+    function test_AcceptCollectionOffer_RevertIf_SelfTrade() public {
+        uint256 offerPrice = 4.5 ether;
+        uint256 expiresAt = block.timestamp + 7 days;
+        uint256 salt = 777;
+
+        bytes memory signature =
+            _signCollectionOffer(buyer, BasePaintMarket.BundleType.YEAR_1, offerPrice, expiresAt, salt);
+
+        BasePaintMarket.CollectionOfferParams memory offer = BasePaintMarket.CollectionOfferParams({
+            buyer: buyer,
+            bundleType: BasePaintMarket.BundleType.YEAR_1,
+            price: offerPrice,
+            expiresAt: expiresAt,
+            salt: salt,
+            nonce: market.offerNonces(buyer)
+        });
+
+        // buyer accepts their own offer → msg.sender == offer.buyer
+        vm.prank(buyer);
+        vm.expectRevert(BasePaintMarket.SelfTrade.selector);
         market.acceptCollectionOffer(offer, signature);
     }
 
