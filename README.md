@@ -32,15 +32,14 @@ Wallet, common on Base) can have their collection offers accepted, not just EOAs
 | Contract | Address |
 |----------|---------|
 | **Marketplace Proxy** (UUPS) | [`0xB0897037052BB9104CcDF743358ea4f91990A362`](https://basescan.org/address/0xB0897037052BB9104CcDF743358ea4f91990A362) |
-| **Implementation** (deployed: v1.13) | [`0x8c4f391e8b2c6351d57cf004bb986ca116f669f2`](https://basescan.org/address/0x8c4f391e8b2c6351d57cf004bb986ca116f669f2#code) |
+| **Implementation** (v1.14) | [`0xb64Cbe9D32bA923119D9ab95Ae3a794EFa8Ffe1A`](https://basescan.org/address/0xb64Cbe9D32bA923119D9ab95Ae3a794EFa8Ffe1A#code) |
 | **BasePaint NFT** | [`0xba5e05cb26b78eda3a2f8e3b3814726305dcac83`](https://basescan.org/address/0xba5e05cb26b78eda3a2f8e3b3814726305dcac83) |
 | **WETH** | [`0x4200000000000000000000000000000000000006`](https://basescan.org/address/0x4200000000000000000000000000000000000006) |
 
-> `src/BasePaintMarket.sol` in this repo is the **v1.14 source** (self-trade guard
-> + `getActiveListings` expiry-boundary fix — see below). The **deployed** proxy
-> implementation above is still **v1.13**; the v1.14 upgrade is pending. v1.14
-> changes no storage and needs no reinitializer, so the upgrade is a plain
-> implementation swap.
+> `src/BasePaintMarket.sol` in this repo is the **v1.14 production source** and
+> matches the deployed implementation above (live on Base mainnet since 2026-07-02).
+> v1.14 added a self-trade guard, a `getActiveListings` expiry-boundary fix, and
+> EIP-1271 smart-contract-wallet offer support — a pure-logic swap (no storage change).
 
 ## Development
 
