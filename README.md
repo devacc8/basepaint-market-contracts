@@ -8,7 +8,7 @@ BasePaint Bundle Marketplace enables trading of complete BasePaint sets in one t
 - **Year 1** / **Year 2** — full-year sets: days 1–365 / 366–730 (365 NFTs each)
 - **24 monthly (mini) sets** (`mini-1` … `mini-24`) — 30-day slices of each year, except each year's closing month (`mini-12`, `mini-24`) which runs 35 days. Ranges are derived on-chain by `_rangeForBundle`; the enum is fixed and append-only.
 
-**v1.14 (source here, upgrade pending):** three logic-only changes, no storage
+**v1.14 (LIVE on Base mainnet, 2026-07-02):** three logic-only changes, no storage
 change — (1) a `SelfTrade` guard on `buyListing` / `acceptCollectionOffer` (a
 party can no longer wash-trade with itself); (2) a `getActiveListings` expiry
 boundary fix (`>=` so a listing stays visible through its exact expiry second,
@@ -79,8 +79,8 @@ This repository includes two versions of the marketplace contract:
 
 | Contract | Description | Use Case |
 |----------|-------------|----------|
-| `BasePaintMarket.sol` | UUPS Upgradeable | **Production** (v1.13) — the deployed & audited contract |
-| `BasePaintMarketFlat.sol` | Non-upgradeable | Legacy Remix/immutable reference — **may lag production** (does not include the v1.13 mini-sets) |
+| `BasePaintMarket.sol` | UUPS Upgradeable | **Production** (v1.14) — the deployed & audited contract |
+| `BasePaintMarketFlat.sol` | Non-upgradeable | Legacy Remix/immutable reference — **lags production** (no v1.13 mini-sets, no v1.14 changes) |
 
 ### Differences
 
@@ -113,7 +113,7 @@ test/
 
 ## Security
 
-- **Audit Status**: v1.11 audited (9.0/10); v1.13 mini-set upgrade re-audited 2026-06 (0 critical/high); v1.14 (self-trade guard + expiry-boundary fix) source published, re-audit pending before the on-chain upgrade
+- **Audit Status**: v1.11 audited (9.0/10); v1.13 mini-set upgrade re-audited 2026-06 (0 critical/high); v1.14 (self-trade guard, expiry-boundary fix, EIP-1271 offers) live on mainnet 2026-07 (Fable full audit 9.0/10; EIP-1271 addition covered by unit + fork-sim tests)
 - **Bug Bounty**: Contact via GitHub issues
 
 ### Security Features
