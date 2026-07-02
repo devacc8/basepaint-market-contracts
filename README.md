@@ -8,10 +8,13 @@ BasePaint Bundle Marketplace enables trading of complete BasePaint sets in one t
 - **Year 1** / **Year 2** — full-year sets: days 1–365 / 366–730 (365 NFTs each)
 - **24 monthly (mini) sets** (`mini-1` … `mini-24`) — 30-day slices of each year, except each year's closing month (`mini-12`, `mini-24`) which runs 35 days. Ranges are derived on-chain by `_rangeForBundle`; the enum is fixed and append-only.
 
-**v1.14 (source here, upgrade pending):** two logic-only hardening changes, no
-storage change — a `SelfTrade` guard on `buyListing` / `acceptCollectionOffer`
-(a party can no longer wash-trade with itself) and a `getActiveListings` expiry
-boundary fix (`>=` so a listing stays visible through its exact expiry second, matching buyability).
+**v1.14 (source here, upgrade pending):** three logic-only changes, no storage
+change — (1) a `SelfTrade` guard on `buyListing` / `acceptCollectionOffer` (a
+party can no longer wash-trade with itself); (2) a `getActiveListings` expiry
+boundary fix (`>=` so a listing stays visible through its exact expiry second,
+matching buyability); (3) **EIP-1271 offers** — `acceptCollectionOffer` uses
+OpenZeppelin `SignatureChecker`, so smart-contract wallets (e.g. Coinbase Smart
+Wallet, common on Base) can have their collection offers accepted, not just EOAs.
 
 ## Features
 

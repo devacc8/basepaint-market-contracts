@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import "../src/BasePaintMarket.sol";
 import "../src/mocks/MockBasePaint.sol";
 import "../src/mocks/MockWETH.sol";
+import {MockERC1271Wallet} from "./mocks/MockERC1271Wallet.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
@@ -1534,6 +1535,81 @@ contract BasePaintMarketTest is Test {
         // Check WETH payment (minus 2% fee)
         uint256 expectedSellerAmount = offerPrice * 98 / 100;
         assertEq(weth.balanceOf(seller), sellerWETHBefore + expectedSellerAmount);
+    }
+
+    /// @dev v1.14 (L-1): an EIP-1271 smart-contract wallet (common on Base) can
+    ///      have its collection offer accepted. The wallet is the buyer of
+    ///      record; its owner EOA signs, and the wallet validates via
+    ///      isValidSignature. SignatureChecker routes contract accounts to 1271.
+    function test_AcceptCollectionOffer_ERC1271_SmartWalletBuyer() public {
+        MockERC1271Wallet wallet = new MockERC1271Wallet(buyer); // controlled by buyer EOA
+
+        vm.prank(seller);
+        basePaint.setApprovalForAll(address(market), true);
+
+        uint256 offerPrice = 4.5 ether;
+        uint256 expiresAt = block.timestamp + 7 days;
+        uint256 salt = 4242;
+
+        // Fund + approve WETH from the wallet (the buyer of record).
+        weth.mint(address(wallet), offerPrice);
+        vm.prank(address(wallet));
+        weth.approve(address(market), offerPrice);
+
+        // Offer buyer is the WALLET; signed by its owner EOA (buyerPrivateKey).
+        bytes memory signature =
+            _signCollectionOffer(address(wallet), BasePaintMarket.BundleType.YEAR_1, offerPrice, expiresAt, salt);
+
+        BasePaintMarket.CollectionOfferParams memory offer = BasePaintMarket.CollectionOfferParams({
+            buyer: address(wallet),
+            bundleType: BasePaintMarket.BundleType.YEAR_1,
+            price: offerPrice,
+            expiresAt: expiresAt,
+            salt: salt,
+            nonce: market.offerNonces(address(wallet))
+        });
+
+        vm.prank(seller);
+        market.acceptCollectionOffer(offer, signature);
+
+        // Bundle went to the smart wallet; seller paid in WETH minus 2% fee.
+        assertEq(basePaint.balanceOf(address(wallet), 1), 1, "bundle to smart wallet");
+        assertEq(weth.balanceOf(seller), offerPrice * 98 / 100, "seller paid via 1271 offer");
+    }
+
+    /// @dev v1.14 (L-1): a 1271 wallet rejects a signature from a non-owner —
+    ///      isValidSignature returns non-magic → acceptance reverts.
+    function test_AcceptCollectionOffer_RevertIf_ERC1271_WrongSigner() public {
+        // Wallet controlled by someone OTHER than buyerPrivateKey's address.
+        MockERC1271Wallet wallet = new MockERC1271Wallet(address(0xDEAD));
+
+        vm.prank(seller);
+        basePaint.setApprovalForAll(address(market), true);
+
+        uint256 offerPrice = 4.5 ether;
+        uint256 expiresAt = block.timestamp + 7 days;
+        uint256 salt = 4243;
+
+        weth.mint(address(wallet), offerPrice);
+        vm.prank(address(wallet));
+        weth.approve(address(market), offerPrice);
+
+        // Signed by buyerPrivateKey, but the wallet's owner is 0xDEAD → 1271 rejects.
+        bytes memory signature =
+            _signCollectionOffer(address(wallet), BasePaintMarket.BundleType.YEAR_1, offerPrice, expiresAt, salt);
+
+        BasePaintMarket.CollectionOfferParams memory offer = BasePaintMarket.CollectionOfferParams({
+            buyer: address(wallet),
+            bundleType: BasePaintMarket.BundleType.YEAR_1,
+            price: offerPrice,
+            expiresAt: expiresAt,
+            salt: salt,
+            nonce: market.offerNonces(address(wallet))
+        });
+
+        vm.prank(seller);
+        vm.expectRevert(BasePaintMarket.InvalidSignature.selector);
+        market.acceptCollectionOffer(offer, signature);
     }
 
     function test_AcceptCollectionOffer_RevertIf_OfferExpired() public {

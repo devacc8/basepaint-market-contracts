@@ -10,7 +10,7 @@ import {IERC1155} from "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {EIP712Upgradeable} from "@openzeppelin/contracts-upgradeable/utils/cryptography/EIP712Upgradeable.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {SignatureChecker} from "@openzeppelin/contracts/utils/cryptography/SignatureChecker.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 /**
@@ -519,8 +519,17 @@ contract BasePaintMarket is
 
         if (usedSignatures[digest]) revert SignatureAlreadyUsed();
 
-        address signer = ECDSA.recover(digest, signature);
-        if (signer != offer.buyer) revert InvalidSignature();
+        // v1.14 (audit L-1): SignatureChecker validates BOTH EOA (ECDSA) and
+        // EIP-1271 contract-wallet signatures — smart wallets (e.g. Coinbase
+        // Smart Wallet) are common on Base and previously could not have their
+        // offers accepted. For EOAs it recovers via OZ ECDSA (rejecting high-s
+        // malleability); for contracts it staticcalls isValidSignature. The
+        // staticcall is a read (cannot reenter to mutate) and nonReentrant
+        // guards the whole function; the digest-keyed replay guard above is
+        // unaffected (a digest is unique per offer regardless of signature form).
+        if (!SignatureChecker.isValidSignatureNow(offer.buyer, digest, signature)) {
+            revert InvalidSignature();
+        }
 
         // Mark signature as used
         usedSignatures[digest] = true;
@@ -948,9 +957,12 @@ contract BasePaintMarket is
 
     /**
      * @notice Get active listings with pagination (v1.3 - optimized with EnumerableSet)
-     * @dev Uses activeListingIds set for O(1) count and direct access
-     *      Gas cost is constant regardless of history (nextListingId)
-     *      v1.11: Filters out expired listings
+     * @dev Iterates activeListingIds (the set of non-sold/non-cancelled listings),
+     *      so cost is O(active listings) — independent of total history
+     *      (nextListingId), but NOT constant. Two passes: count non-expired, then
+     *      collect the page. Intended as an off-chain eth_call (view); an on-chain
+     *      caller with a very large active set could approach the block gas limit.
+     *      v1.11: Filters out expired listings.
      * @param offset Starting index (applied AFTER filtering expired)
      * @param limit Maximum number of listings to return (capped at 100)
      * @return listingIds Array of listing IDs (non-expired only)
