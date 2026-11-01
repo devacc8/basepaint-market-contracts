@@ -1,0 +1,31 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for the 26 bundle types (years + 24 mini-sets). Three layers are pinned to THIS file so they cannot silently drift: backend/src/config/bundles.ts (via backend/__tests__/config/bundles.test.ts), frontend/lib/bundles.ts (via frontend/__tests__/lib/bundles.test.ts), and the on-chain _rangeForBundle in src/BasePaintMarket.sol (via test/MiniSets.t.sol, kept byte-identical). APPEND-ONLY: index IS the on-chain enum value; a future Year-3 appends at the end, never reorder or remove. start/end are inclusive day numbers; ticker/title are the presentation labels.",
+  "bundles": [
+    { "index": 0,  "id": "year-1",  "start": 1,   "end": 365, "ticker": "Y1",    "title": "Year 1" },
+    { "index": 1,  "id": "year-2",  "start": 366, "end": 730, "ticker": "Y2",    "title": "Year 2" },
+    { "index": 2,  "id": "mini-1",  "start": 1,   "end": 30,  "ticker": "Y1M1",  "title": "Year 1 · Month 1" },
+    { "index": 3,  "id": "mini-2",  "start": 31,  "end": 60,  "ticker": "Y1M2",  "title": "Year 1 · Month 2" },
+    { "index": 4,  "id": "mini-3",  "start": 61,  "end": 90,  "ticker": "Y1M3",  "title": "Year 1 · Month 3" },
+    { "index": 5,  "id": "mini-4",  "start": 91,  "end": 120, "ticker": "Y1M4",  "title": "Year 1 · Month 4" },
+    { "index": 6,  "id": "mini-5",  "start": 121, "end": 150, "ticker": "Y1M5",  "title": "Year 1 · Month 5" },
+    { "index": 7,  "id": "mini-6",  "start": 151, "end": 180, "ticker": "Y1M6",  "title": "Year 1 · Month 6" },
+    { "index": 8,  "id": "mini-7",  "start": 181, "end": 210, "ticker": "Y1M7",  "title": "Year 1 · Month 7" },
+    { "index": 9,  "id": "mini-8",  "start": 211, "end": 240, "ticker": "Y1M8",  "title": "Year 1 · Month 8" },
+    { "index": 10, "id": "mini-9",  "start": 241, "end": 270, "ticker": "Y1M9",  "title": "Year 1 · Month 9" },
+    { "index": 11, "id": "mini-10", "start": 271, "end": 300, "ticker": "Y1M10", "title": "Year 1 · Month 10" },
+    { "index": 12, "id": "mini-11", "start": 301, "end": 330, "ticker": "Y1M11", "title": "Year 1 · Month 11" },
+    { "index": 13, "id": "mini-12", "start": 331, "end": 365, "ticker": "Y1M12", "title": "Year 1 · Month 12" },
+    { "index": 14, "id": "mini-13", "start": 366, "end": 395, "ticker": "Y2M1",  "title": "Year 2 · Month 1" },
+    { "index": 15, "id": "mini-14", "start": 396, "end": 425, "ticker": "Y2M2",  "title": "Year 2 · Month 2" },
+    { "index": 16, "id": "mini-15", "start": 426, "end": 455, "ticker": "Y2M3",  "title": "Year 2 · Month 3" },
+    { "index": 17, "id": "mini-16", "start": 456, "end": 485, "ticker": "Y2M4",  "title": "Year 2 · Month 4" },
+    { "index": 18, "id": "mini-17", "start": 486, "end": 515, "ticker": "Y2M5",  "title": "Year 2 · Month 5" },
+    { "index": 19, "id": "mini-18", "start": 516, "end": 545, "ticker": "Y2M6",  "title": "Year 2 · Month 6" },
+    { "index": 20, "id": "mini-19", "start": 546, "end": 575, "ticker": "Y2M7",  "title": "Year 2 · Month 7" },
+    { "index": 21, "id": "mini-20", "start": 576, "end": 605, "ticker": "Y2M8",  "title": "Year 2 · Month 8" },
+    { "index": 22, "id": "mini-21", "start": 606, "end": 635, "ticker": "Y2M9",  "title": "Year 2 · Month 9" },
+    { "index": 23, "id": "mini-22", "start": 636, "end": 665, "ticker": "Y2M10", "title": "Year 2 · Month 10" },
+    { "index": 24, "id": "mini-23", "start": 666, "end": 695, "ticker": "Y2M11", "title": "Year 2 · Month 11" },
+    { "index": 25, "id": "mini-24", "start": 696, "end": 730, "ticker": "Y2M12", "title": "Year 2 · Month 12" }
+  ]
+}

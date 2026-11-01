@@ -37,6 +37,21 @@ contract UpgradeMarket is Script {
             vm.startBroadcast(deployerPrivateKey);
         }
 
+        // ------------------------------------------------------------------
+        // L-07 (audit 2026-05-18): STORAGE-LAYOUT SAFETY — run BEFORE broadcast.
+        // UUPS upgrades brick the proxy on a storage-layout collision. Validate
+        // the new implementation against the deployed one with the OpenZeppelin
+        // Upgrades tooling before sending the upgrade tx, e.g.:
+        //
+        //   npx @openzeppelin/upgrades-core validate out/build-info \
+        //     --contract BasePaintMarket --reference <prev-impl-build-info>
+        //
+        // v1.14 (2026-07-01) changes NO storage at all — the delta is pure logic
+        // (getActiveListings >= expiry boundary + self-trade guard). Storage
+        // layout is byte-identical to v1.13, so the upgrade is trivially safe;
+        // still run the validator as discipline before broadcasting.
+        // ------------------------------------------------------------------
+
         // Deploy new implementation
         console.log("1. Deploying new implementation...");
         BasePaintMarket newImplementation = new BasePaintMarket();
@@ -47,9 +62,16 @@ contract UpgradeMarket is Script {
         console.log("2. Upgrading proxy...");
         BasePaintMarket proxy = BasePaintMarket(payable(proxyAddress));
 
-        // Call upgradeToAndCall with empty data (no reinitializer needed)
+        // Snapshot state BEFORE the upgrade so we can assert it survived (v1.14
+        // changes no storage, so every value below must be byte-identical after).
+        uint256 miniFloorBefore = proxy.minMiniListingPrice();
+
+        // v1.14: NO new storage and NO reinitializer. `initializeV13` was a
+        // reinitializer(2) already consumed on the live proxy in the v1.13
+        // upgrade — re-calling it would revert. Upgrade with EMPTY call data:
+        // a plain implementation swap, nothing to initialize or front-run.
         proxy.upgradeToAndCall(address(newImplementation), "");
-        console.log("   Proxy upgraded successfully");
+        console.log("   Proxy upgraded to v1.14 (no reinitializer)");
         console.log("");
 
         // Verify upgrade
@@ -64,10 +86,15 @@ contract UpgradeMarket is Script {
         console.log("   - nextListingId:", nextListingId);
         console.log("   - platformFee:", platformFee);
         console.log("   - minListingPrice:", minListingPrice);
+        console.log("   - minMiniListingPrice:", proxy.minMiniListingPrice());
         console.log("");
 
-        // Test new function exists
-        console.log("4. Testing new function getActiveListings...");
+        // v1.14 preserves all v1.13 state — assert the mini floor is unchanged
+        // across the upgrade (whatever it was, not a hardcoded value).
+        require(proxy.minMiniListingPrice() == miniFloorBefore, "v1.14 upgrade lost minMiniListingPrice state");
+
+        // Smoke-test a paginated view (getActiveListings is v1.3, not new in v1.13).
+        console.log("4. Smoke-testing getActiveListings...");
         try proxy.getActiveListings(0, 10) returns (
             uint256[] memory listingIds, BasePaintMarket.Listing[] memory listingData, uint256 totalActive
         ) {

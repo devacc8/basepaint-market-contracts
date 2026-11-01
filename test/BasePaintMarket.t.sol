@@ -8,6 +8,7 @@ import "../src/mocks/MockWETH.sol";
 import {MockERC1271Wallet} from "./mocks/MockERC1271Wallet.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 contract BasePaintMarketTest is Test {
     BasePaintMarket public market;
@@ -754,6 +755,172 @@ contract BasePaintMarketTest is Test {
         basePaint.setApprovalForAll(address(market), true);
         market.createListing(BasePaintMarket.BundleType.YEAR_1, LISTING_PRICE, DEFAULT_DURATION);
         vm.stopPrank();
+    }
+
+    // ============================================
+    // TESTS: PAUSE MATRIX (audit 2026-07-24, sec. 1.4)
+    // ============================================
+    // Expected behaviour while paused:
+    //   REVERT: createListing, buyListing, acceptCollectionOffer (whenNotPaused)
+    //   WORK:   cancelListing, cancelAllOffers, cleanupExpired* (emergency exits)
+    //   WORK:   admin functions (onlyOwner, not gated by pause)
+    //   pause/unpause themselves: onlyOwner
+
+    function test_Pause_RevertIf_NotOwner() public {
+        vm.prank(attacker);
+        vm.expectRevert(); // OwnableUnauthorizedAccount
+        market.pause("attacker attempt");
+
+        assertFalse(market.paused());
+    }
+
+    function test_Unpause_RevertIf_NotOwner() public {
+        vm.prank(owner);
+        market.pause("Testing");
+
+        vm.prank(attacker);
+        vm.expectRevert(); // OwnableUnauthorizedAccount
+        market.unpause();
+
+        assertTrue(market.paused());
+    }
+
+    function test_BuyListing_RevertIf_Paused() public {
+        uint256 listingId = _createListing(seller, BasePaintMarket.BundleType.YEAR_1, LISTING_PRICE);
+
+        vm.prank(owner);
+        market.pause("Testing pause");
+
+        vm.prank(buyer);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        market.buyListing{value: LISTING_PRICE}(listingId);
+
+        // Listing stays active — it can still be bought after unpause
+        assertTrue(market.getListing(listingId).active);
+    }
+
+    function test_AcceptCollectionOffer_RevertIf_Paused() public {
+        vm.prank(seller);
+        basePaint.setApprovalForAll(address(market), true);
+
+        uint256 offerPrice = 4.5 ether;
+        uint256 expiresAt = block.timestamp + 7 days;
+        uint256 salt = 12345;
+
+        vm.prank(buyer);
+        weth.approve(address(market), offerPrice);
+
+        bytes memory signature =
+            _signCollectionOffer(buyer, BasePaintMarket.BundleType.YEAR_1, offerPrice, expiresAt, salt);
+
+        BasePaintMarket.CollectionOfferParams memory offer = BasePaintMarket.CollectionOfferParams({
+            buyer: buyer,
+            bundleType: BasePaintMarket.BundleType.YEAR_1,
+            price: offerPrice,
+            expiresAt: expiresAt,
+            salt: salt,
+            nonce: market.offerNonces(buyer)
+        });
+
+        vm.prank(owner);
+        market.pause("Testing pause");
+
+        vm.prank(seller);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        market.acceptCollectionOffer(offer, signature);
+
+        // No state changed: seller keeps the bundle, WETH stays with buyer
+        assertEq(basePaint.balanceOf(seller, 1), 1);
+        assertEq(weth.balanceOf(seller), 0);
+    }
+
+    /// @dev Safety property: a seller can always pull their listing back during
+    ///      a pause (cancelListing intentionally omits `whenNotPaused`).
+    function test_CancelListing_WorksWhilePaused() public {
+        uint256 listingId = _createListing(seller, BasePaintMarket.BundleType.YEAR_1, LISTING_PRICE);
+
+        vm.prank(owner);
+        market.pause("Testing pause");
+
+        vm.prank(seller);
+        market.cancelListing(listingId);
+
+        assertFalse(market.getListing(listingId).active);
+        assertEq(market.activeListingByUser(seller, BasePaintMarket.BundleType.YEAR_1), 0);
+    }
+
+    /// @dev Safety property: offer cancellation (nonce bump) works during a
+    ///      pause so users can invalidate signed offers in an emergency.
+    function test_CancelAllOffers_WorksWhilePaused() public {
+        vm.prank(owner);
+        market.pause("Testing pause");
+
+        vm.prank(buyer);
+        market.cancelAllOffers();
+
+        assertEq(market.offerNonces(buyer), 1);
+
+        // After unpause, an offer signed with the old nonce is dead
+        vm.prank(owner);
+        market.unpause();
+
+        vm.prank(seller);
+        basePaint.setApprovalForAll(address(market), true);
+
+        uint256 offerPrice = 4.5 ether;
+        uint256 expiresAt = block.timestamp + 7 days;
+        uint256 salt = 12345;
+
+        vm.prank(buyer);
+        weth.approve(address(market), offerPrice);
+
+        BasePaintMarket.CollectionOfferParams memory offer = BasePaintMarket.CollectionOfferParams({
+            buyer: buyer,
+            bundleType: BasePaintMarket.BundleType.YEAR_1,
+            price: offerPrice,
+            expiresAt: expiresAt,
+            salt: salt,
+            nonce: 0 // stale nonce from before the pause
+        });
+        bytes memory signature = _signOffer(offer, buyerPrivateKey);
+
+        vm.prank(seller);
+        vm.expectRevert(BasePaintMarket.OfferNonceMismatch.selector);
+        market.acceptCollectionOffer(offer, signature);
+    }
+
+    /// @dev Batch cleanup (plural) must also work while paused, same as the
+    ///      single-listing variant pinned by test_L03_CleanupWhilePaused.
+    function test_CleanupExpiredListings_BatchWorksWhilePaused() public {
+        uint256 listingId = _createListing(seller, BasePaintMarket.BundleType.YEAR_1, LISTING_PRICE);
+
+        vm.warp(block.timestamp + DEFAULT_DURATION + 1); // expire the listing
+
+        vm.prank(owner);
+        market.pause("Testing pause");
+
+        uint256[] memory ids = new uint256[](1);
+        ids[0] = listingId;
+        market.cleanupExpiredListings(ids);
+
+        assertFalse(market.getListing(listingId).active);
+    }
+
+    /// @dev Admin functions are onlyOwner-gated, not pause-gated: the owner can
+    ///      still reconfigure the contract while it is paused.
+    function test_AdminFunctions_WorkWhilePaused() public {
+        vm.prank(owner);
+        market.pause("Testing pause");
+
+        vm.startPrank(owner);
+        market.setPlatformFee(500);
+        market.setMinListingPrice(2 ether);
+        market.addToBlacklist(attacker);
+        vm.stopPrank();
+
+        assertEq(market.platformFee(), 500);
+        assertEq(market.minListingPrice(), 2 ether);
+        assertTrue(market.blacklist(attacker));
     }
 
     function test_Blacklist_Success() public {

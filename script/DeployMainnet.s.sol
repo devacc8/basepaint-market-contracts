@@ -73,7 +73,11 @@ contract DeployMainnet is Script {
         console.log("");
         console.log("=== Next Steps ===");
         console.log("1. Verify on Basescan:");
-        console.log("   forge verify-contract", address(implementation), "src/BasePaintMarket.sol:BasePaintMarket --chain-id 8453");
+        console.log(
+            "   forge verify-contract",
+            address(implementation),
+            "src/BasePaintMarket.sol:BasePaintMarket --chain-id 8453"
+        );
         console.log("2. Update backend/src/config/contracts.ts");
         console.log("3. Update Railway environment variables");
         console.log("4. Redeploy backend");

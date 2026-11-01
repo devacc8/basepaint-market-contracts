@@ -3,8 +3,18 @@ src = "src"
 out = "out"
 libs = ["lib"]
 solc_version = "0.8.24"
+# Pin the EVM target (audit 2026-07-24 SC-9): solc 0.8.24 already defaults to
+# cancun, but pinning makes the deployed bytecode target explicit and immune to
+# a future solc bump changing the default. Base supports Cancun (MCOPY/TSTORE).
+evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
+
+# Allow tests to read the shared bundle oracle. test/MiniSets.t.sol pins the
+# contract's _rangeForBundle to bundle-oracle.json — the SAME repo-root file the
+# backend (config/bundles) and frontend (lib/bundles) suites read, so all three
+# layers derive their 26 day-ranges from one source.
+fs_permissions = [{ access = "read", path = "./bundle-oracle.json" }]
 
 # Development profile (fast compilation)
 [profile.dev]
@@ -15,6 +25,7 @@ via_ir = false
 via_ir = true
 optimizer = true
 optimizer_runs = 200
+evm_version = "cancun"
 
 remappings = [
     '@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/',
